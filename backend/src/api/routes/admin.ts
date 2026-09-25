@@ -45,6 +45,7 @@ import {
   getApiKeyUsageStats,
 } from "../controllers/admin.js";
 import { getRequestArchive } from "../controllers/debugArchive.js";
+import { postArchiveRestore, getArchiveStatusHandler } from "../controllers/archiveAdmin.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { ipAllowlist } from "../middleware/ipAllowlist.js";
 import { config } from "../../config.js";
@@ -120,4 +121,11 @@ adminRouter.get("/security/events", requireApiKey({ role: "admin" }), getSecurit
 adminRouter.post("/sandbox/reset", requireApiKey({ role: "admin" }), resetSandboxData);
 
 adminRouter.post("/db/vacuum", requireApiKey({ role: "admin" }), vacuumDatabase);
-
+// #921: Archive restore
+adminRouter.post("/archive/restore", requireApiKey({ role: "admin" }), postArchiveRestore);
+// #922: Archive status
+adminRouter.get("/archive/status", requireApiKey({ minRole: "readonly" }), getArchiveStatusHandler);
+// #921 — Archive restore
+adminRouter.post("/archive/restore", requireApiKey({ role: "admin" }), postArchiveRestore);
+// #922 — Archive status
+adminRouter.get("/archive/status", requireApiKey({ minRole: "readonly" }), getArchiveStatusHandler);

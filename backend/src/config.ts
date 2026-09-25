@@ -137,6 +137,16 @@ export const envSchema = z.object({
     .default("90")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1)),
+  SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
+  TVL_SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
   ARCHIVE_CRON: z
     .string()
     .default("0 2 * * *")
@@ -316,6 +326,8 @@ export const config = {
   },
 
   eventsRetentionDays: parsed.data.EVENTS_RETENTION_DAYS,
+  snapshotRetentionDays: parsed.data.SNAPSHOT_RETENTION_DAYS,
+  tvlSnapshotRetentionDays: parsed.data.TVL_SNAPSHOT_RETENTION_DAYS,
 
   adminIpAllowlist: parsed.data.ADMIN_IP_ALLOWLIST
     ? parsed.data.ADMIN_IP_ALLOWLIST.split(",").map((s) => s.trim()).filter(Boolean)

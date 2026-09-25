@@ -125,3 +125,12 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
   created_at       TIMESTAMPTZ DEFAULT NOW(),
   request_body_hash TEXT NOT NULL
 );
+
+-- Feature flags for gradual rollout (#916)
+CREATE TABLE IF NOT EXISTS feature_flags (
+  name               TEXT PRIMARY KEY,
+  enabled            BOOLEAN NOT NULL DEFAULT FALSE,
+  enabled_for_roles  TEXT[] NOT NULL DEFAULT '{}',
+  rollout_percent    INT NOT NULL DEFAULT 0 CHECK (rollout_percent BETWEEN 0 AND 100),
+  updated_at         TIMESTAMPTZ DEFAULT NOW()
+);

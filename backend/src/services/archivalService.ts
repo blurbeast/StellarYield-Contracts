@@ -19,13 +19,19 @@ const ARCHIVE_TABLES: ArchiveTableSpec[] = [
     timestampColumn: "created_at",
   },
   {
+    // #920 — Archive share_balance_snapshots older than SNAPSHOT_RETENTION_DAYS
+    // (default 730 days / 2 years). Historical share history queries read from
+    // both live and archive tables when the requested range spans the boundary.
     tableName: "share_balance_snapshots",
     idColumn: "id",
     vaultJoinColumn: "vault_id",
-    retentionDays: 365,
+    retentionDays: 730,
     timestampColumn: "recorded_at",
   },
   {
+    // #919 — Archive vault_tvl_snapshots older than TVL_SNAPSHOT_RETENTION_DAYS
+    // (default 365 days). GET /api/v1/vaults/:contractId/tvl-history reads from
+    // both live and archive tables when `from` extends into the archive range.
     tableName: "vault_tvl_snapshots",
     idColumn: "id",
     vaultJoinColumn: "vault_id",
@@ -44,6 +50,14 @@ async function ensureArchiveTable(liveTable: string): Promise<void> {
 function getRetentionDays(spec: ArchiveTableSpec): number {
   if (spec.tableName === "indexed_events") {
     return config.eventsRetentionDays;
+  }
+  // #919: honour TVL_SNAPSHOT_RETENTION_DAYS env override
+  if (spec.tableName === "vault_tvl_snapshots") {
+    return config.tvlSnapshotRetentionDays ?? spec.retentionDays;
+  }
+  // #920: honour SNAPSHOT_RETENTION_DAYS env override
+  if (spec.tableName === "share_balance_snapshots") {
+    return config.snapshotRetentionDays ?? spec.retentionDays;
   }
   return spec.retentionDays;
 }
@@ -87,6 +101,7 @@ function buildInsertQuery(spec: ArchiveTableSpec, retentionDays: number): string
     ${excludedVaultsJoin}
     WHERE t.${spec.timestampColumn} < NOW() - (${retentionDays}::int * INTERVAL '1 day')
       ${excludedVaultsWhere}
+    ON CONFLICT DO NOTHING
   `;
 }
 
@@ -204,4 +219,123 @@ export async function runArchival(): Promise<ArchiveResult[]> {
   }
 
   return results;
+}
+
+// =============================================================
+// #921 — Archive restore: move rows from archive back to live
+// =============================================================
+
+export interface RestoreParams {
+  contractId: string;
+  fromDate: string;
+  toDate: string;
+  table: "indexed_events" | "vault_tvl_snapshots";
+}
+
+export interface RestoreResult {
+  table: string;
+  restoredCount: number;
+}
+
+export async function restoreFromArchive(
+  params: RestoreParams,
+  adminUserId: string,
+): Promise<RestoreResult> {
+  const { contractId, fromDate, toDate, table } = params;
+  const archiveTable = `${table}_archive`;
+  const spec = ARCHIVE_TABLES.find((s) => s.tableName === table);
+  if (!spec) {
+    throw new Error(`Unknown archive table: ${table}`);
+  }
+
+  // Move matching rows back to the live table, skipping duplicates.
+  const result = await query<{ id: string }>(
+    `
+    INSERT INTO ${table}
+    SELECT a.*
+    FROM ${archiveTable} a
+    WHERE a.${spec.vaultJoinColumn} = $1
+      AND a.${spec.timestampColumn} >= $2::timestamptz
+      AND a.${spec.timestampColumn} <= $3::timestamptz
+    ON CONFLICT (${spec.idColumn}) DO NOTHING
+    RETURNING ${spec.idColumn}
+    `,
+    [contractId, fromDate, toDate],
+  );
+
+  const restoredCount = result.length;
+
+  // Delete restored rows from the archive table.
+  if (restoredCount > 0) {
+    const restoredIds = result.map((r) => r.id);
+    await query(
+      `DELETE FROM ${archiveTable} WHERE ${spec.idColumn} = ANY($1::uuid[])`,
+      [restoredIds],
+    );
+  }
+
+  // Audit log entry.
+  await query(
+    `INSERT INTO admin_audit_log (action, actor, metadata)
+     VALUES ('archive_restore', $1, $2::jsonb)`,
+    [adminUserId, JSON.stringify({ table, contractId, fromDate, toDate, restoredCount })],
+  );
+
+  logger.info(
+    { table, contractId, fromDate, toDate, restoredCount, adminUserId },
+    "Archive restore complete",
+  );
+
+  return { table, restoredCount };
+}
+
+// =============================================================
+// #922 — Archive status: row counts for live vs archive tables
+// =============================================================
+
+export interface ArchiveTableStatus {
+  name: string;
+  liveRows: number;
+  archiveRows: number;
+  oldestArchiveDate: string | null;
+  latestArchiveDate: string | null;
+}
+
+export interface ArchiveStatus {
+  tables: ArchiveTableStatus[];
+}
+
+export async function getArchiveStatus(): Promise<ArchiveStatus> {
+  const tables: ArchiveTableStatus[] = [];
+
+  for (const spec of ARCHIVE_TABLES) {
+    const archiveTable = `${spec.tableName}_archive`;
+
+    const [liveResult, archiveResult] = await Promise.all([
+      query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM ${spec.tableName}`,
+      ),
+      query<{
+        count: string;
+        oldest: string | null;
+        latest: string | null;
+      }>(
+        `SELECT
+           COUNT(*)::text AS count,
+           MIN(${spec.timestampColumn})::text AS oldest,
+           MAX(${spec.timestampColumn})::text AS latest
+         FROM ${archiveTable}`,
+      ).catch(() => [{ count: "0", oldest: null, latest: null }]),
+    ]);
+
+    tables.push({
+      name: spec.tableName,
+      liveRows: parseInt(liveResult[0]?.count ?? "0", 10),
+      archiveRows: parseInt(archiveResult[0]?.count ?? "0", 10),
+      oldestArchiveDate: archiveResult[0]?.oldest ?? null,
+      latestArchiveDate: archiveResult[0]?.latest ?? null,
+    });
+  }
+
+  return { tables };
 }

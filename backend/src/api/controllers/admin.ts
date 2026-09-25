@@ -590,7 +590,17 @@ export async function getAdminEvents(req: Request, res: Response, next: NextFunc
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
-    const rows = await query(
+    // Issue #918: reads from the live table only; archived is always false for
+    // live events. Events moved to indexed_events_archive are not included here.
+    const rows = await query<{
+      id: number;
+      ledger: number;
+      tx_hash: string;
+      contract_id: string;
+      event_type: string;
+      payload: unknown;
+      created_at: Date;
+    }>(
       `SELECT id, ledger, tx_hash, contract_id, event_type, payload, created_at
        FROM indexed_events
        ${whereClause}
@@ -599,7 +609,7 @@ export async function getAdminEvents(req: Request, res: Response, next: NextFunc
       params,
     );
 
-    res.json(rows);
+    res.json(rows.map((row) => ({ ...row, archived: false })));
   } catch (err) {
     next(err);
   }
