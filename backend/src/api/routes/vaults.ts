@@ -185,6 +185,13 @@ const metadataHistoryQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).default(20).transform((value) => Math.min(value, 100)),
 });
 
+// TVL history endpoint (#864): from/to range plus explicit bucket strategy.
+const tvlHistoryQuerySchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  bucket: z.enum(["hour", "day", "week"]).optional(),
+});
+
 export const vaultsRouter = Router();
 
 vaultsRouter.get("/categories", listCategories);
@@ -269,7 +276,12 @@ vaultsRouter.get(
   getVaultMetadataHistory,
 );
 // Get vault TVL history: GET /api/v1/vaults/:contractId/tvl-history
-vaultsRouter.get("/:contractId/tvl-history", validateParams(vaultParamsSchema), getVaultTvlHistory);
+vaultsRouter.get(
+  "/:contractId/tvl-history",
+  validateParams(vaultParamsSchema),
+  validateQuery(tvlHistoryQuerySchema),
+  getVaultTvlHistory,
+);
 // Get compound projection: GET /api/v1/vaults/:contractId/compound-projection?shares=<amount>&epochs=<n>
 vaultsRouter.get("/:contractId/compound-projection", validateParams(vaultParamsSchema), getCompoundProjection);
 // Early redemption fee preview: GET /api/v1/vaults/:contractId/early-redemption-fee?shares=

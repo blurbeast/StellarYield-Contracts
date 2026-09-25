@@ -115,6 +115,8 @@ export function createApp(): Express {
   });
 
   app.use("/health", publicLimiter, healthRouter);
+  // Versioned alias for SDK clients and integration tests (#874).
+  app.use("/api/v1/health", publicLimiter, healthRouter);
   app.use("/api/changelog", publicLimiter, changelogRouter);
   app.use("/api/status", publicLimiter, statusRouter);
   app.use("/api/v1/vaults", publicLimiter, vaultsRouter);
