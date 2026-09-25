@@ -153,6 +153,9 @@ export const envSchema = z.object({
   REQUEST_BODY_LIMIT: z
     .string()
     .default("100kb"),
+  DEBUG_ARCHIVE_ROUTES: z
+    .string()
+    .default(""),
   INTERNAL_SECRET: z
     .string()
     .default(""),
@@ -319,6 +322,10 @@ export const config = {
     : [],
 
   requestBodyLimit: parsed.data.REQUEST_BODY_LIMIT,
+  debugArchiveRoutes: parsed.data.DEBUG_ARCHIVE_ROUTES
+    .split(",")
+    .map((route) => route.trim())
+    .filter(Boolean),
   internalSecret: parsed.data.INTERNAL_SECRET,
 
   cors: {
@@ -349,5 +356,10 @@ export const ROUTE_CACHE_CONTROL: Record<string, number> = {
   "/api/v1/yields": 60,
   "/api/v1/analytics": 300,
   "/health": 0,
+};
+
+export const ROUTE_SLA_MS: Record<string, number> = {
+  "/api/v1/vaults": 200,
+  "/api/v1/yields/:contractId/epochs": 500,
 };
 

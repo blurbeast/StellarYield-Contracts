@@ -94,6 +94,7 @@ npm run dev
 | `WEBHOOK_SECRET` | No | empty | Optional webhook signing secret. |
 | `ADMIN_API_KEY` | No | empty | Admin API authentication key. |
 | `KEY_INACTIVITY_DAYS` | No | unset (never) | Days an API key may go unused before the daily sweep deactivates it. Never-used keys are measured from `created_at`. Deactivated keys are rejected with 403. |
+| `DEBUG_ARCHIVE_ROUTES` | No | empty | Comma-separated route patterns to archive, such as `/api/v1/admin/*`. Archived requests are retained FIFO up to 1000 rows. |
 
 Docker Compose reads `.env.example` and overrides `DATABASE_URL` so the backend
 connects to the `postgres` service.
@@ -103,6 +104,7 @@ connects to the `postgres` service.
 ### Public Endpoints
 
 - `GET /health` - service and database health check.
+- `GET /api/changelog` - machine-readable API release history.
 - `GET /api/v1/vaults` - list vaults.
 - `GET /api/v1/vaults?q=bond` - search vaults by name or symbol using full-text search.
 - `GET /api/v1/vaults/count` - return the total number of vaults.
@@ -136,6 +138,10 @@ Require `X-API-Key` header with admin key.
 - `POST /api/v1/admin/indexer/replay` - replay events for a ledger range.
 - `GET /api/v1/admin/vaults/:contractId/audit` - audit log.
 - `GET /api/v1/admin/events` - indexed events.
+- `GET /api/v1/admin/debug/archive` - last 50 archived request/response pairs.
+- `GET /api/v1/admin/api-keys/:id/usage` - rolling 24-hour request count and top routes for an API key.
+
+Routes listed in `ROUTE_SLA_MS` emit `X-SLA-Ms`; responses exceeding the configured target also emit `X-SLA-Exceeded: true`.
 
 ## Documentation
 

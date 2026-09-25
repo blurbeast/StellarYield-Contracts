@@ -41,7 +41,10 @@ import {
   getSecurityEvents,
   toggleVaultArchiveExclusion,
   verifyArchiveConsistency,
+  getApiDiff,
+  getApiKeyUsageStats,
 } from "../controllers/admin.js";
+import { getRequestArchive } from "../controllers/debugArchive.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { ipAllowlist } from "../middleware/ipAllowlist.js";
 import { config } from "../../config.js";
@@ -73,8 +76,10 @@ adminRouter.get("/vaults/:contractId/audit", getVaultAudit);
 adminRouter.get("/vaults/archived", getArchivedVaults);
 adminRouter.patch("/vaults/:contractId/archive-exclusion", requireApiKey({ role: "admin" }), toggleVaultArchiveExclusion);
 adminRouter.get("/archive/verify", verifyArchiveConsistency);
+adminRouter.get("/debug/archive", requireApiKey({ role: "admin" }), getRequestArchive);
 adminRouter.get("/consistency/total-supply", getTotalSupplyConsistency);
 adminRouter.get("/api-keys", getApiKeys);
+adminRouter.get("/api-keys/:id/usage", requireApiKey({ role: "admin" }), getApiKeyUsageStats);
 adminRouter.delete("/api-keys/:id", requireApiKey({ role: "admin" }), deleteApiKey);
 adminRouter.patch("/api-keys/:id/description", requireApiKey({ role: "admin" }), updateApiKeyDescription);
 adminRouter.get("/api-diff", getApiDiff);

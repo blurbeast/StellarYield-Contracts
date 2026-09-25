@@ -26,8 +26,10 @@ import { cacheControl } from "./api/middleware/cacheControl.js";
 import { internalAuth } from "./api/middleware/internalAuth.js";
 import { internalRouter } from "./api/routes/internal.js";
 import { publicLimiter, authLimiter } from "./api/middleware/rateLimit.js";
-import { staticCacheMiddleware, cacheResponse, getCachedResponse } from "./api/middleware/responseCache.js";
-import { queryTimeoutMiddleware } from "./api/middleware/queryTimeout.js";
+import { cacheResponse } from "./api/middleware/responseCache.js";
+import { responseSla } from "./api/middleware/routeSla.js";
+import { requestArchive } from "./api/middleware/requestArchive.js";
+import { changelogRouter } from "./api/routes/changelog.js";
 
 // Cache static responses at startup
 function initStaticCache(): void {
@@ -38,8 +40,6 @@ function initStaticCache(): void {
   };
   cacheResponse("openapi.json", openapiSpec, 200, { "Content-Type": "application/json" });
 
-  const changelog = { version: "1.0.0", changes: [] };
-  cacheResponse("changelog", changelog, 200, { "Content-Type": "application/json" });
 }
 
 initStaticCache();
@@ -88,6 +88,8 @@ export function createApp(): Express {
 
   app.use(requestId);
   app.use(requestContext);
+  app.use(responseSla);
+  app.use(requestArchive);
   app.use(responseSizeLimit());
   app.use(cacheControl());
 
@@ -111,11 +113,13 @@ export function createApp(): Express {
   });
 
   app.use("/health", publicLimiter, healthRouter);
+  app.use("/api/changelog", publicLimiter, changelogRouter);
   app.use("/api/v1/vaults", publicLimiter, vaultsRouter);
   app.use("/api/v1/users", publicLimiter, usersRouter);
   app.use("/api/v1/yields", publicLimiter, yieldsRouter);
   app.use("/api/v1/analytics", publicLimiter, analyticsRouter);
   app.use("/api/v1/factory", publicLimiter, factoryRouter);
+  app.use("/api/v1/proxy", authLimiter, proxyRouter);
   app.use("/api/v1/admin/notifications", authLimiter, notificationsRouter);
   app.use("/api/v1/admin", authLimiter, adminRouter);
   app.use("/api/v1/webhooks", authLimiter, webhooksRouter);

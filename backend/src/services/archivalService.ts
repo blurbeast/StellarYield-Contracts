@@ -90,21 +90,6 @@ function buildInsertQuery(spec: ArchiveTableSpec, retentionDays: number): string
   `;
 }
 
-function buildDeleteQuery(spec: ArchiveTableSpec, retentionDays: number): string {
-  const excludedVaultsJoin = `
-    LEFT JOIN vaults v ON v.${spec.vaultJoinColumn} = t.${spec.vaultJoinColumn}
-  `;
-  const excludedVaultsWhere = `AND (v.exclude_from_archive IS NULL OR v.exclude_from_archive = FALSE)`;
-
-  return `
-    DELETE FROM ${spec.tableName} t
-    USING vaults v
-    WHERE v.${spec.vaultJoinColumn} = t.${spec.vaultJoinColumn}
-      AND t.${spec.timestampColumn} < NOW() - (${retentionDays}::int * INTERVAL '1 day')
-      ${excludedVaultsWhere}
-  `;
-}
-
 function buildDeleteQuerySimple(spec: ArchiveTableSpec, retentionDays: number): string {
   if (spec.vaultJoinColumn === "contract_id") {
     return `
