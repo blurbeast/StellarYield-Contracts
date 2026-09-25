@@ -16,7 +16,9 @@ mod tests;
 pub use crate::types::*;
 
 use soroban_sdk::xdr::ToXdr;
-use soroban_sdk::{contract, contractimpl, panic_with_error, Address, BytesN, Env, String, Vec};
+use soroban_sdk::{
+    contract, contractimpl, panic_with_error, Address, BytesN, Env, IntoVal, String, Vec,
+};
 
 use crate::errors::Error;
 use crate::events::*;
@@ -413,10 +415,7 @@ impl VaultFactory {
     /// # Returns
     /// `Vec<Option<i128>>` in the same order as `requests`; `None` for any
     /// vault not registered with this factory.
-    pub fn bulk_preview_deposit(
-        e: &Env,
-        requests: Vec<(Address, i128)>,
-    ) -> Vec<Option<i128>> {
+    pub fn bulk_preview_deposit(e: &Env, requests: Vec<(Address, i128)>) -> Vec<Option<i128>> {
         let mut results: Vec<Option<i128>> = Vec::new(e);
         let preview_symbol = soroban_sdk::Symbol::new(e, "preview_deposit");
 
@@ -425,7 +424,7 @@ impl VaultFactory {
                 results.push_back(None);
                 continue;
             }
-            let args: Vec<soroban_sdk::Val> = soroban_sdk::vec![e, assets.into()];
+            let args: Vec<soroban_sdk::Val> = soroban_sdk::vec![e, assets.into_val(e)];
             let shares: i128 = e.invoke_contract(&vault, &preview_symbol, args);
             results.push_back(Some(shares));
         }
@@ -981,9 +980,9 @@ impl VaultFactory {
             // These three must be present for the vault's `InitParams` to unpack;
             // omitting them makes every `create_*_vault` call trap with
             // Error(Object, UnexpectedSize) inside the vault constructor.
-            operator_fee_bps: 0u32,      // no operator cut on distributed yield
-            timelock_delay: 172_800u64,  // 48 hours, matching the vault's own default
-            yield_vesting_period: 0u64,  // yield claimable immediately
+            operator_fee_bps: 0u32,     // no operator cut on distributed yield
+            timelock_delay: 172_800u64, // 48 hours, matching the vault's own default
+            yield_vesting_period: 0u64, // yield claimable immediately
         };
 
         let vault_addr = e

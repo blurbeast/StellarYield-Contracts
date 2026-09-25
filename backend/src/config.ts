@@ -137,6 +137,16 @@ export const envSchema = z.object({
     .default("90")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1)),
+  SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
+  TVL_SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
   ARCHIVE_CRON: z
     .string()
     .default("0 2 * * *")
@@ -153,6 +163,9 @@ export const envSchema = z.object({
   REQUEST_BODY_LIMIT: z
     .string()
     .default("100kb"),
+  DEBUG_ARCHIVE_ROUTES: z
+    .string()
+    .default(""),
   INTERNAL_SECRET: z
     .string()
     .default(""),
@@ -313,12 +326,18 @@ export const config = {
   },
 
   eventsRetentionDays: parsed.data.EVENTS_RETENTION_DAYS,
+  snapshotRetentionDays: parsed.data.SNAPSHOT_RETENTION_DAYS,
+  tvlSnapshotRetentionDays: parsed.data.TVL_SNAPSHOT_RETENTION_DAYS,
 
   adminIpAllowlist: parsed.data.ADMIN_IP_ALLOWLIST
     ? parsed.data.ADMIN_IP_ALLOWLIST.split(",").map((s) => s.trim()).filter(Boolean)
     : [],
 
   requestBodyLimit: parsed.data.REQUEST_BODY_LIMIT,
+  debugArchiveRoutes: parsed.data.DEBUG_ARCHIVE_ROUTES
+    .split(",")
+    .map((route) => route.trim())
+    .filter(Boolean),
   internalSecret: parsed.data.INTERNAL_SECRET,
 
   cors: {
@@ -349,5 +368,10 @@ export const ROUTE_CACHE_CONTROL: Record<string, number> = {
   "/api/v1/yields": 60,
   "/api/v1/analytics": 300,
   "/health": 0,
+};
+
+export const ROUTE_SLA_MS: Record<string, number> = {
+  "/api/v1/vaults": 200,
+  "/api/v1/yields/:contractId/epochs": 500,
 };
 

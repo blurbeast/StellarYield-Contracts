@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import type { Request, Response, NextFunction } from "express";
 import Cursor from "pg-cursor";
@@ -12,6 +15,57 @@ import { jobQueue } from "../../services/jobQueue.js";
 import { sseManager } from "../../services/sseManager.js";
 import { logger } from "../../logger.js";
 import { createAdminSessionToken, refreshAdminSessionToken } from "../middleware/auth.js";
+import { getApiKeyUsage } from "../../cache/redis.js";
+
+const OPENAPI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../openapi");
+
+export async function getApiDiff(req: Request, res: Response, next: NextFunction) {
+  try {
+    const from = String(req.query["from"] ?? "");
+    const to = String(req.query["to"] ?? "");
+    if (!from || !to) {
+      res.status(400).json({
+        error: "BadRequest",
+        message: "Both 'from' and 'to' query parameters are required",
+      });
+      return;
+    }
+    if (!(["v1", "v2"] as const).includes(from as "v1" | "v2") || !(["v1", "v2"] as const).includes(to as "v1" | "v2")) {
+      res.status(400).json({
+        error: "BadRequest",
+        message: "Invalid version. Only 'v1' and 'v2' are supported",
+      });
+      return;
+    }
+
+    const fromSpec = JSON.parse(readFileSync(resolve(OPENAPI_DIR, `${from}.json`), "utf8")) as { paths: Record<string, unknown> };
+    const toSpec = JSON.parse(readFileSync(resolve(OPENAPI_DIR, `${to}.json`), "utf8")) as { paths: Record<string, unknown> };
+    const fromPaths = fromSpec.paths ?? {};
+    const toPaths = toSpec.paths ?? {};
+    const added = Object.keys(toPaths).filter((path) => !(path in fromPaths));
+    const removed = Object.keys(fromPaths).filter((path) => !(path in toPaths));
+    const modified = Object.keys(fromPaths).filter(
+      (path) => path in toPaths && JSON.stringify(fromPaths[path]) !== JSON.stringify(toPaths[path]),
+    );
+
+    res.json({ from, to, added, removed, modified });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getApiKeyUsageStats(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = Number(req.params["id"]);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "BadRequest", message: "API key id must be a positive integer" });
+      return;
+    }
+    res.json(await getApiKeyUsage(id));
+  } catch (err) {
+    next(err);
+  }
+}
 
 export async function getSecurityEvents(_req: Request, res: Response, next: NextFunction) {
   try {
@@ -330,8 +384,9 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
       deactivated_at: Date | null;
       allowed_methods: string[] | null;
       allowed_cidrs: string[] | null;
+            description: string | null;
     }>(
-      `SELECT id, label, role, created_at, expires_at, last_used_at, active, deactivated_at,
+            `SELECT id, label, role, description, created_at, expires_at, last_used_at, active, deactivated_at,
               allowed_methods, allowed_cidrs
        FROM api_keys ORDER BY created_at DESC`,
     );
@@ -341,17 +396,18 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
         id: row.id,
         label: row.label,
         role: row.role,
+        description: row.description ?? null,
         createdAt: row.created_at,
         expiresAt: row.expires_at,
         // null until the key authenticates a request for the first time (#933)
-        lastUsedAt: row.last_used_at ?? null,
+        ...(row.last_used_at !== undefined ? { lastUsedAt: row.last_used_at ?? null } : {}),
         // false once the inactivity sweep has retired the key (#934)
-        active: row.active,
-        deactivatedAt: row.deactivated_at ?? null,
+        ...(row.active !== undefined ? { active: row.active } : {}),
+        ...(row.deactivated_at !== undefined ? { deactivatedAt: row.deactivated_at ?? null } : {}),
         // null means the key may use any HTTP method (#935)
-        allowedMethods: row.allowed_methods ?? null,
+        ...(row.allowed_methods !== undefined ? { allowedMethods: row.allowed_methods ?? null } : {}),
         // null means the key may be used from any IP (#928)
-        allowedCidrs: row.allowed_cidrs ?? null,
+        ...(row.allowed_cidrs !== undefined ? { allowedCidrs: row.allowed_cidrs ?? null } : {}),
       })),
     );
   } catch (err) {

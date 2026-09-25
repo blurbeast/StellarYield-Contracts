@@ -5,11 +5,9 @@ export type VaultState =
   | "Closed"
   | "Cancelled";
 
-declare global {
-  namespace Express {
-    interface Request {
-      queryTimeoutMs?: number;
-    }
+declare module "express-serve-static-core" {
+  interface Request {
+    queryTimeoutMs?: number;
   }
 }
 

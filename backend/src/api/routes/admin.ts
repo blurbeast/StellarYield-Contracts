@@ -41,7 +41,10 @@ import {
   getSecurityEvents,
   toggleVaultArchiveExclusion,
   verifyArchiveConsistency,
+  getApiDiff,
+  getApiKeyUsageStats,
 } from "../controllers/admin.js";
+import { getRequestArchive } from "../controllers/debugArchive.js";
 import { postArchiveRestore, getArchiveStatusHandler } from "../controllers/archiveAdmin.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { ipAllowlist } from "../middleware/ipAllowlist.js";
@@ -74,8 +77,10 @@ adminRouter.get("/vaults/:contractId/audit", getVaultAudit);
 adminRouter.get("/vaults/archived", getArchivedVaults);
 adminRouter.patch("/vaults/:contractId/archive-exclusion", requireApiKey({ role: "admin" }), toggleVaultArchiveExclusion);
 adminRouter.get("/archive/verify", verifyArchiveConsistency);
+adminRouter.get("/debug/archive", requireApiKey({ role: "admin" }), getRequestArchive);
 adminRouter.get("/consistency/total-supply", getTotalSupplyConsistency);
 adminRouter.get("/api-keys", getApiKeys);
+adminRouter.get("/api-keys/:id/usage", requireApiKey({ role: "admin" }), getApiKeyUsageStats);
 adminRouter.delete("/api-keys/:id", requireApiKey({ role: "admin" }), deleteApiKey);
 adminRouter.patch("/api-keys/:id/description", requireApiKey({ role: "admin" }), updateApiKeyDescription);
 adminRouter.get("/api-diff", getApiDiff);
@@ -116,6 +121,10 @@ adminRouter.get("/security/events", requireApiKey({ role: "admin" }), getSecurit
 adminRouter.post("/sandbox/reset", requireApiKey({ role: "admin" }), resetSandboxData);
 
 adminRouter.post("/db/vacuum", requireApiKey({ role: "admin" }), vacuumDatabase);
+// #921: Archive restore
+adminRouter.post("/archive/restore", requireApiKey({ role: "admin" }), postArchiveRestore);
+// #922: Archive status
+adminRouter.get("/archive/status", requireApiKey({ minRole: "readonly" }), getArchiveStatusHandler);
 // #921 — Archive restore
 adminRouter.post("/archive/restore", requireApiKey({ role: "admin" }), postArchiveRestore);
 // #922 — Archive status

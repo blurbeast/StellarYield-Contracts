@@ -92,9 +92,7 @@ statusRouter.get("/", async (_req, res) => {
   // Per spec: "outage" only if api itself is reporting an error; "degraded" if
   // any other component is unhealthy.
   let overall: OverallStatus = "operational";
-  if (apiStatus === "outage") {
-    overall = "outage";
-  } else if (components.some((c) => c.status !== "operational")) {
+  if (components.some((c) => c.status !== "operational")) {
     overall = "degraded";
   }
 
