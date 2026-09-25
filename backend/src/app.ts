@@ -7,6 +7,7 @@ import { printSchema } from "graphql";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { healthRouter } from "./api/routes/health.js";
+import { statusRouter } from "./api/routes/status.js";
 import { vaultsRouter } from "./api/routes/vaults.js";
 import { usersRouter } from "./api/routes/users.js";
 import { yieldsRouter } from "./api/routes/yields.js";
@@ -112,6 +113,7 @@ export function createApp(): Express {
   });
 
   app.use("/health", publicLimiter, healthRouter);
+  app.use("/api/status", publicLimiter, statusRouter);
   app.use("/api/v1/vaults", publicLimiter, vaultsRouter);
   app.use("/api/v1/users", publicLimiter, usersRouter);
   app.use("/api/v1/yields", publicLimiter, yieldsRouter);
