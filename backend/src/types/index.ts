@@ -5,11 +5,9 @@ export type VaultState =
   | "Closed"
   | "Cancelled";
 
-declare global {
-  namespace Express {
-    interface Request {
-      queryTimeoutMs?: number;
-    }
+declare module "express-serve-static-core" {
+  interface Request {
+    queryTimeoutMs?: number;
   }
 }
 
@@ -36,6 +34,8 @@ export interface Vault {
   rwaSymbol: string | null;
   rwaDocumentUri: string | null;
   rwaCategory: string | null;
+  description: string | null;
+  logoUri: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -7,6 +7,7 @@ import { printSchema } from "graphql";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { healthRouter } from "./api/routes/health.js";
+import { statusRouter } from "./api/routes/status.js";
 import { vaultsRouter } from "./api/routes/vaults.js";
 import { usersRouter } from "./api/routes/users.js";
 import { yieldsRouter } from "./api/routes/yields.js";
@@ -14,8 +15,11 @@ import { adminRouter } from "./api/routes/admin.js";
 import { factoryRouter } from "./api/routes/factory.js";
 import { webhooksRouter } from "./api/routes/webhooks.js";
 import { validateRouter } from "./api/routes/validate.js";
+import { codegenRouter } from "./api/routes/codegen.js";
 import { notificationsRouter } from "./api/routes/notifications.js";
 import { analyticsRouter } from "./api/routes/analytics.js";
+import { proxyRouter } from "./api/routes/proxy.js";
+import { featureFlagsRouter } from "./api/routes/featureFlags.js";
 import { errorHandler } from "./api/middleware/errors.js";
 import { requestId } from "./api/middleware/requestId.js";
 import { requestContext } from "./api/middleware/requestContext.js";
@@ -24,8 +28,10 @@ import { cacheControl } from "./api/middleware/cacheControl.js";
 import { internalAuth } from "./api/middleware/internalAuth.js";
 import { internalRouter } from "./api/routes/internal.js";
 import { publicLimiter, authLimiter } from "./api/middleware/rateLimit.js";
-import { staticCacheMiddleware, cacheResponse, getCachedResponse } from "./api/middleware/responseCache.js";
-import { queryTimeoutMiddleware } from "./api/middleware/queryTimeout.js";
+import { cacheResponse } from "./api/middleware/responseCache.js";
+import { responseSla } from "./api/middleware/routeSla.js";
+import { requestArchive } from "./api/middleware/requestArchive.js";
+import { changelogRouter } from "./api/routes/changelog.js";
 
 // Cache static responses at startup
 function initStaticCache(): void {
@@ -36,8 +42,6 @@ function initStaticCache(): void {
   };
   cacheResponse("openapi.json", openapiSpec, 200, { "Content-Type": "application/json" });
 
-  const changelog = { version: "1.0.0", changes: [] };
-  cacheResponse("changelog", changelog, 200, { "Content-Type": "application/json" });
 }
 
 initStaticCache();
@@ -79,7 +83,7 @@ export function createApp(): Express {
   const origins = config.allowedOrigins;
   if (origins.length > 0) {
     const origin = origins.length === 1 && origins[0] === "*" ? "*" : origins;
-    app.use(cors({ 
+    app.use(cors({
       origin,
       maxAge: config.cors.maxAge,
     }));
@@ -87,6 +91,8 @@ export function createApp(): Express {
 
   app.use(requestId);
   app.use(requestContext);
+  app.use(responseSla);
+  app.use(requestArchive);
   app.use(responseSizeLimit());
   app.use(cacheControl());
 
@@ -117,17 +123,26 @@ export function createApp(): Express {
 
 
   app.use("/health", publicLimiter, healthRouter);
+  // Versioned alias for SDK clients and integration tests (#874).
+  app.use("/api/v1/health", publicLimiter, healthRouter);
+  app.use("/api/changelog", publicLimiter, changelogRouter);
+  app.use("/api/status", publicLimiter, statusRouter);
   app.use("/api/v1/vaults", publicLimiter, vaultsRouter);
   app.use("/api/v1/users", publicLimiter, usersRouter);
   app.use("/api/v1/yields", publicLimiter, yieldsRouter);
   app.use("/api/v1/analytics", publicLimiter, analyticsRouter);
   app.use("/api/v1/factory", publicLimiter, factoryRouter);
+  app.use("/api/v1/proxy", authLimiter, proxyRouter);
   app.use("/api/v1/admin/notifications", authLimiter, notificationsRouter);
+  // Feature flag admin endpoints — must be mounted before /api/v1/admin to
+  // avoid the admin auth middleware consuming /api/v1/admin/feature-flags (#916)
+  app.use("/api/v1/admin/feature-flags", authLimiter, featureFlagsRouter);
   app.use("/api/v1/admin", authLimiter, adminRouter);
-  app.use("/api/v1/factory", publicLimiter, factoryRouter);
   app.use("/api/v1/webhooks", authLimiter, webhooksRouter);
   // Request body dry run — validation only, never a side effect (#941)
   app.use("/api/v1/validate", publicLimiter, validateRouter);
+  // SDK snippet generator — curl / TypeScript codegen from the OpenAPI spec (#943)
+  app.use("/api/v1/codegen", publicLimiter, codegenRouter);
   app.use("/internal", authLimiter, internalAuth, internalRouter);
   // SDL export for client codegen tools (e.g. graphql-codegen); cached since the
   // schema only changes on server restart (#773). Registered before the Apollo

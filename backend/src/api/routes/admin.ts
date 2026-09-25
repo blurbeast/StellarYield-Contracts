@@ -7,6 +7,7 @@ import {
   backfillIndexer,
   deleteApiKey,
   getApiKeys,
+  updateApiKeyDescription,
   getWebhookDeliveries,
   bulkToggleWebhooks,
   getArchivedVaults,
@@ -37,7 +38,14 @@ import {
   refreshAdminSession,
   getSecurityHeadersAudit,
   resetSandboxData,
+  getSecurityEvents,
+  toggleVaultArchiveExclusion,
+  verifyArchiveConsistency,
+  getApiDiff,
+  getApiKeyUsageStats,
 } from "../controllers/admin.js";
+import { getRequestArchive } from "../controllers/debugArchive.js";
+import { postArchiveRestore, getArchiveStatusHandler } from "../controllers/archiveAdmin.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { ipAllowlist } from "../middleware/ipAllowlist.js";
 import { config } from "../../config.js";
@@ -67,9 +75,15 @@ adminRouter.post("/indexer/backfill", requireApiKey({ role: "admin" }), backfill
 adminRouter.get("/events", getAdminEvents);
 adminRouter.get("/vaults/:contractId/audit", getVaultAudit);
 adminRouter.get("/vaults/archived", getArchivedVaults);
+adminRouter.patch("/vaults/:contractId/archive-exclusion", requireApiKey({ role: "admin" }), toggleVaultArchiveExclusion);
+adminRouter.get("/archive/verify", verifyArchiveConsistency);
+adminRouter.get("/debug/archive", requireApiKey({ role: "admin" }), getRequestArchive);
 adminRouter.get("/consistency/total-supply", getTotalSupplyConsistency);
 adminRouter.get("/api-keys", getApiKeys);
+adminRouter.get("/api-keys/:id/usage", requireApiKey({ role: "admin" }), getApiKeyUsageStats);
 adminRouter.delete("/api-keys/:id", requireApiKey({ role: "admin" }), deleteApiKey);
+adminRouter.patch("/api-keys/:id/description", requireApiKey({ role: "admin" }), updateApiKeyDescription);
+adminRouter.get("/api-diff", getApiDiff);
 adminRouter.get("/webhooks/:id/deliveries", getWebhookDeliveries);
 // Issue #1006: bulk webhook enable/disable
 adminRouter.post("/webhooks/bulk/toggle", requireApiKey({ role: "admin" }), bulkToggleWebhooks);
@@ -103,7 +117,15 @@ adminRouter.get("/jobs/:jobId", getJobStatus);
 adminRouter.post("/benchmarks", requireApiKey({ role: "admin" }), postBenchmark);
 adminRouter.get("/benchmarks/:name", getBenchmarksByName);
 adminRouter.get("/security/headers-audit", requireApiKey({ role: "admin" }), getSecurityHeadersAudit);
+adminRouter.get("/security/events", requireApiKey({ role: "admin" }), getSecurityEvents);
 adminRouter.post("/sandbox/reset", requireApiKey({ role: "admin" }), resetSandboxData);
 
 adminRouter.post("/db/vacuum", requireApiKey({ role: "admin" }), vacuumDatabase);
-
+// #921: Archive restore
+adminRouter.post("/archive/restore", requireApiKey({ role: "admin" }), postArchiveRestore);
+// #922: Archive status
+adminRouter.get("/archive/status", requireApiKey({ minRole: "readonly" }), getArchiveStatusHandler);
+// #921 — Archive restore
+adminRouter.post("/archive/restore", requireApiKey({ role: "admin" }), postArchiveRestore);
+// #922 — Archive status
+adminRouter.get("/archive/status", requireApiKey({ minRole: "readonly" }), getArchiveStatusHandler);

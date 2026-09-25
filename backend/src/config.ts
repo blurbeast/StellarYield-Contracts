@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { z } from "zod";
+import cron from "node-cron";
 
-const envSchema = z.object({
+export const envSchema = z.object({
   PORT: z
     .string()
     .transform((v) => parseInt(v, 10))
@@ -136,12 +137,35 @@ const envSchema = z.object({
     .default("90")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1)),
+  SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
+  TVL_SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
+  ARCHIVE_CRON: z
+    .string()
+    .default("0 2 * * *")
+    .refine((v) => cron.validate(v), {
+      message: "ARCHIVE_CRON must be a valid cron expression",
+    }),
+  DRY_RUN: z
+    .string()
+    .default("false")
+    .transform((v) => ["true", "1", "yes"].includes(v.toLowerCase())),
   ADMIN_IP_ALLOWLIST: z
     .string()
     .default(""),
   REQUEST_BODY_LIMIT: z
     .string()
     .default("100kb"),
+  DEBUG_ARCHIVE_ROUTES: z
+    .string()
+    .default(""),
   INTERNAL_SECRET: z
     .string()
     .default(""),
@@ -206,6 +230,7 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().optional(),
+  DEPLOY_ID: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -245,6 +270,12 @@ export const config = {
   },
   get enableSandboxReset() {
     return (process.env.ENABLE_SANDBOX_RESET ?? String(parsed.data.ENABLE_SANDBOX_RESET)).toLowerCase() === "true" || process.env.ENABLE_SANDBOX_RESET === "1";
+  },
+  get archiveCron(): string {
+    return process.env.ARCHIVE_CRON ?? parsed.data.ARCHIVE_CRON;
+  },
+  get dryRun(): boolean {
+    return ["true", "1", "yes"].includes((process.env.DRY_RUN ?? String(parsed.data.DRY_RUN)).toLowerCase());
   },
 
   stellar: {
@@ -295,12 +326,18 @@ export const config = {
   },
 
   eventsRetentionDays: parsed.data.EVENTS_RETENTION_DAYS,
+  snapshotRetentionDays: parsed.data.SNAPSHOT_RETENTION_DAYS,
+  tvlSnapshotRetentionDays: parsed.data.TVL_SNAPSHOT_RETENTION_DAYS,
 
   adminIpAllowlist: parsed.data.ADMIN_IP_ALLOWLIST
     ? parsed.data.ADMIN_IP_ALLOWLIST.split(",").map((s) => s.trim()).filter(Boolean)
     : [],
 
   requestBodyLimit: parsed.data.REQUEST_BODY_LIMIT,
+  debugArchiveRoutes: parsed.data.DEBUG_ARCHIVE_ROUTES
+    .split(",")
+    .map((route) => route.trim())
+    .filter(Boolean),
   internalSecret: parsed.data.INTERNAL_SECRET,
 
   cors: {
@@ -323,6 +360,7 @@ export const config = {
     pass: parsed.data.SMTP_PASS,
     from: parsed.data.SMTP_FROM,
   },
+  deployId: parsed.data.DEPLOY_ID ?? null,
 } as const;
 
 export const ROUTE_CACHE_CONTROL: Record<string, number> = {
@@ -330,5 +368,10 @@ export const ROUTE_CACHE_CONTROL: Record<string, number> = {
   "/api/v1/yields": 60,
   "/api/v1/analytics": 300,
   "/health": 0,
+};
+
+export const ROUTE_SLA_MS: Record<string, number> = {
+  "/api/v1/vaults": 200,
+  "/api/v1/yields/:contractId/epochs": 500,
 };
 

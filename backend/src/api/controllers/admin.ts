@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import type { Request, Response, NextFunction } from "express";
 import Cursor from "pg-cursor";
@@ -12,6 +15,90 @@ import { jobQueue } from "../../services/jobQueue.js";
 import { sseManager } from "../../services/sseManager.js";
 import { logger } from "../../logger.js";
 import { createAdminSessionToken, refreshAdminSessionToken } from "../middleware/auth.js";
+import { getApiKeyUsage } from "../../cache/redis.js";
+
+const OPENAPI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../openapi");
+
+export async function getApiDiff(req: Request, res: Response, next: NextFunction) {
+  try {
+    const from = String(req.query["from"] ?? "");
+    const to = String(req.query["to"] ?? "");
+    if (!from || !to) {
+      res.status(400).json({
+        error: "BadRequest",
+        message: "Both 'from' and 'to' query parameters are required",
+      });
+      return;
+    }
+    if (!(["v1", "v2"] as const).includes(from as "v1" | "v2") || !(["v1", "v2"] as const).includes(to as "v1" | "v2")) {
+      res.status(400).json({
+        error: "BadRequest",
+        message: "Invalid version. Only 'v1' and 'v2' are supported",
+      });
+      return;
+    }
+
+    const fromSpec = JSON.parse(readFileSync(resolve(OPENAPI_DIR, `${from}.json`), "utf8")) as { paths: Record<string, unknown> };
+    const toSpec = JSON.parse(readFileSync(resolve(OPENAPI_DIR, `${to}.json`), "utf8")) as { paths: Record<string, unknown> };
+    const fromPaths = fromSpec.paths ?? {};
+    const toPaths = toSpec.paths ?? {};
+    const added = Object.keys(toPaths).filter((path) => !(path in fromPaths));
+    const removed = Object.keys(fromPaths).filter((path) => !(path in toPaths));
+    const modified = Object.keys(fromPaths).filter(
+      (path) => path in toPaths && JSON.stringify(fromPaths[path]) !== JSON.stringify(toPaths[path]),
+    );
+
+    res.json({ from, to, added, removed, modified });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getApiKeyUsageStats(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = Number(req.params["id"]);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "BadRequest", message: "API key id must be a positive integer" });
+      return;
+    }
+    res.json(await getApiKeyUsage(id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getSecurityEvents(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const rows = await query<{
+      id: number;
+      event_type: string;
+      ip_address: string | null;
+      api_key_label: string | null;
+      path: string | null;
+      details: Record<string, unknown> | null;
+      created_at: Date;
+    }>(
+      `SELECT id, event_type, ip_address, api_key_label, path, details, created_at
+       FROM security_events
+       ORDER BY created_at DESC
+       LIMIT 200`,
+    );
+
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        eventType: row.event_type,
+        ipAddress: row.ip_address,
+        apiKeyLabel: row.api_key_label,
+        path: row.path,
+        details: row.details,
+        createdAt: row.created_at,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+}
 
 const stellarAddressSchema = z.string().length(56).regex(/^G[A-Z2-7]{55}$/);
 const contractAddressSchema = z.string().length(56).regex(/^C[A-Z2-7]{55}$/);
@@ -125,7 +212,7 @@ export async function createAdminSession(req: Request, res: Response, next: Next
   }
 }
 
-export async function refreshAdminSession(req: Request, res: Response, next: NextFunction) {
+export async function refreshAdminSession(req: Request, res: Response, _next: NextFunction) {
   try {
     const authHeader = req.headers.authorization ?? "";
     if (!authHeader.startsWith("Bearer ")) {
@@ -190,13 +277,17 @@ export async function getAdminStats(_req: Request, res: Response, next: NextFunc
     const userCountRows = await query<{ count: string }>("SELECT COUNT(*)::text as count FROM users");
     const totalAssetsRows = await query<{ total: string }>("SELECT COALESCE(SUM(total_assets::numeric), 0)::text as total FROM vaults");
     const epochCountRows = await query<{ count: string }>("SELECT COUNT(*)::text as count FROM epochs");
+    const archiveSizeRows = await query<{ total: string }>(
+      "SELECT COALESCE(SUM(pg_total_relation_size(relid)), 0)::text AS total FROM pg_stat_user_tables WHERE relname LIKE '%_archive'",
+    );
 
     const vaultCount = parseInt(vaultCountRows[0]?.count ?? "0", 10);
     const userCount = parseInt(userCountRows[0]?.count ?? "0", 10);
     const totalValueLocked = totalAssetsRows[0]?.total ?? "0";
     const epochCount = parseInt(epochCountRows[0]?.count ?? "0", 10);
+    const archiveSizeBytes = parseInt(archiveSizeRows[0]?.total ?? "0", 10);
 
-    res.json({ vaultCount, userCount, totalValueLocked, epochCount });
+    res.json({ vaultCount, userCount, totalValueLocked, epochCount, archiveSizeBytes });
   } catch (err) {
     next(err);
   }
@@ -292,9 +383,11 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
       active: boolean;
       deactivated_at: Date | null;
       allowed_methods: string[] | null;
+      allowed_cidrs: string[] | null;
+            description: string | null;
     }>(
-      `SELECT id, label, role, created_at, expires_at, last_used_at, active, deactivated_at,
-              allowed_methods
+            `SELECT id, label, role, description, created_at, expires_at, last_used_at, active, deactivated_at,
+              allowed_methods, allowed_cidrs
        FROM api_keys ORDER BY created_at DESC`,
     );
 
@@ -303,17 +396,83 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
         id: row.id,
         label: row.label,
         role: row.role,
+        description: row.description ?? null,
         createdAt: row.created_at,
         expiresAt: row.expires_at,
         // null until the key authenticates a request for the first time (#933)
-        lastUsedAt: row.last_used_at ?? null,
+        ...(row.last_used_at !== undefined ? { lastUsedAt: row.last_used_at ?? null } : {}),
         // false once the inactivity sweep has retired the key (#934)
-        active: row.active,
-        deactivatedAt: row.deactivated_at ?? null,
+        ...(row.active !== undefined ? { active: row.active } : {}),
+        ...(row.deactivated_at !== undefined ? { deactivatedAt: row.deactivated_at ?? null } : {}),
         // null means the key may use any HTTP method (#935)
-        allowedMethods: row.allowed_methods ?? null,
+        ...(row.allowed_methods !== undefined ? { allowedMethods: row.allowed_methods ?? null } : {}),
+        // null means the key may be used from any IP (#928)
+        ...(row.allowed_cidrs !== undefined ? { allowedCidrs: row.allowed_cidrs ?? null } : {}),
       })),
     );
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateApiKeyDescription(req: Request, res: Response, next: NextFunction) {
+  try {
+    const keyId = String(req.params["id"]);
+    const idNum = parseInt(keyId, 10);
+
+    if (isNaN(idNum) || idNum <= 0) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid key ID" });
+      return;
+    }
+
+    const descriptionSchema = z.object({
+      description: z.string().nullable(),
+    });
+
+    const parsed = descriptionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid request body" });
+      return;
+    }
+
+    const { description } = parsed.data;
+
+    // Check if key exists
+    const existingRows = await query<{ id: number }>("SELECT id FROM api_keys WHERE id = $1", [idNum]);
+
+    if (existingRows.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "API key not found" });
+      return;
+    }
+
+    // Update only the description field
+    await query(
+      "UPDATE api_keys SET description = $1 WHERE id = $2",
+      [description, idNum],
+    );
+
+    // Return the updated key
+    const updatedRows = await query<{
+      id: number;
+      label: string | null;
+      role: string;
+      created_at: Date;
+      expires_at: Date | null;
+      description: string | null;
+    }>(
+      "SELECT id, label, role, created_at, expires_at, description FROM api_keys WHERE id = $1",
+      [idNum],
+    );
+
+    const updatedKey = updatedRows[0];
+    res.json({
+      id: updatedKey.id,
+      label: updatedKey.label,
+      role: updatedKey.role,
+      createdAt: updatedKey.created_at,
+      expiresAt: updatedKey.expires_at,
+      description: updatedKey.description,
+    });
   } catch (err) {
     next(err);
   }
@@ -431,7 +590,17 @@ export async function getAdminEvents(req: Request, res: Response, next: NextFunc
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
-    const rows = await query(
+    // Issue #918: reads from the live table only; archived is always false for
+    // live events. Events moved to indexed_events_archive are not included here.
+    const rows = await query<{
+      id: number;
+      ledger: number;
+      tx_hash: string;
+      contract_id: string;
+      event_type: string;
+      payload: unknown;
+      created_at: Date;
+    }>(
       `SELECT id, ledger, tx_hash, contract_id, event_type, payload, created_at
        FROM indexed_events
        ${whereClause}
@@ -440,7 +609,7 @@ export async function getAdminEvents(req: Request, res: Response, next: NextFunc
       params,
     );
 
-    res.json(rows);
+    res.json(rows.map((row) => ({ ...row, archived: false })));
   } catch (err) {
     next(err);
   }
@@ -1508,6 +1677,108 @@ export async function getBenchmarksByName(req: Request, res: Response, next: Nex
         createdAt: r.created_at,
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Issue #926: Vault archive exclusion toggle ──────────────────────────────
+export async function toggleVaultArchiveExclusion(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid contractId format" });
+      return;
+    }
+    const contractId = parsed.data;
+
+    const bodySchema = z.object({ excludeFromArchive: z.boolean() });
+    const bodyParsed = bodySchema.safeParse(req.body);
+    if (!bodyParsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "excludeFromArchive must be a boolean" });
+      return;
+    }
+    const { excludeFromArchive } = bodyParsed.data;
+
+    const rows = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+
+    await query(
+      "UPDATE vaults SET exclude_from_archive = $1, updated_at = NOW() WHERE contract_id = $2",
+      [excludeFromArchive, contractId],
+    );
+
+    await logAdminAudit(req, "toggle_vault_archive_exclusion", `/api/v1/admin/vaults/${contractId}/archive-exclusion`);
+
+    res.json({ contractId, excludeFromArchive });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Issue #927: Archival verification ────────────────────────────────────────
+const ARCHIVABLE_TABLES = ["indexed_events", "share_balance_snapshots", "vault_tvl_snapshots"];
+
+export async function verifyArchiveConsistency(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const tableResults: {
+      name: string;
+      liveRows: number;
+      archiveRows: number;
+      totalRows: number;
+      consistent: boolean;
+    }[] = [];
+
+    for (const table of ARCHIVABLE_TABLES) {
+      const liveRowsResult = await query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM ${table}`,
+      );
+      const liveRows = parseInt(liveRowsResult[0]?.count ?? "0", 10);
+
+      const archiveTable = `${table}_archive`;
+      let archiveRows = 0;
+      try {
+        const archiveRowsResult = await query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count FROM ${archiveTable}`,
+        );
+        archiveRows = parseInt(archiveRowsResult[0]?.count ?? "0", 10);
+      } catch {
+        // Archive table may not exist yet
+      }
+
+      const totalRows = liveRows + archiveRows;
+
+      const auditResult = await query<{ pre_archival_count: string }>(
+        `SELECT pre_archival_count::text
+         FROM archive_audit_log
+         WHERE table_name = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [table],
+      );
+
+      let consistent = true;
+      if (auditResult.length > 0) {
+        const preArchivalCount = parseInt(auditResult[0].pre_archival_count, 10);
+        consistent = totalRows === preArchivalCount;
+      }
+
+      tableResults.push({
+        name: table,
+        liveRows,
+        archiveRows,
+        totalRows,
+        consistent,
+      });
+    }
+
+    res.json({ tables: tableResults });
   } catch (err) {
     next(err);
   }
